@@ -1,0 +1,1044 @@
+'use strict';
+/* =====================================================
+ * 斩鬼夜行 · 鬼灭之刃粉丝同人小游戏
+ * 横版动作：扮演鬼杀队剑士，用水之呼吸斩杀恶鬼
+ * 纯 Canvas 绘制 + WebAudio 合成音效，无外部资源
+ * ===================================================== */
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const W = 960, H = 540, GROUND = 472;
+
+/* ---------------- 工具 ---------------- */
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* ---------------- 音频（WebAudio 合成） ---------------- */
+const AudioSys = {
+  ctx: null, muted: false,
+  init() {
+    if (this.ctx) return;
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { /* 不支持则静默 */ }
+  },
+  now() { return this.ctx ? this.ctx.currentTime : 0; },
+  tone(freq, dur, type, vol, slideTo) {
+    if (!this.ctx || this.muted) return;
+    const t = this.now(), o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + dur);
+    g.gain.setValueAtTime(vol || 0.2, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(this.ctx.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  },
+  noise(dur, freq, vol) {
+    if (!this.ctx || this.muted) return;
+    const t = this.now(), len = Math.floor(this.ctx.sampleRate * dur);
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq || 2000; f.Q.value = 0.8;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol || 0.25, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.ctx.destination);
+    src.start(t);
+  },
+  swing()  { this.noise(0.14, 2600, 0.20); },
+  swingBig(){ this.noise(0.30, 1400, 0.30); this.tone(180, 0.25, 'sawtooth', 0.10, 60); },
+  hit()    { this.tone(220, 0.10, 'square', 0.18, 90); this.noise(0.08, 900, 0.15); },
+  hitBig() { this.tone(160, 0.18, 'square', 0.24, 60); this.noise(0.15, 700, 0.22); },
+  hurt()   { this.tone(170, 0.28, 'sawtooth', 0.22, 55); },
+  jump()   { this.tone(300, 0.12, 'sine', 0.10, 520); },
+  skill()  { this.tone(240, 0.35, 'sawtooth', 0.16, 880); this.noise(0.35, 3200, 0.18); },
+  dash()   { this.noise(0.25, 1800, 0.22); this.tone(140, 0.25, 'sawtooth', 0.12, 420); },
+  demonDie(){ this.tone(320, 0.30, 'sawtooth', 0.14, 70); this.noise(0.25, 500, 0.16); },
+  wave()   { this.tone(65, 0.5, 'sine', 0.35, 40); this.tone(98, 0.4, 'sine', 0.2, 60); },
+  bossRoar(){ this.tone(90, 0.9, 'sawtooth', 0.30, 45); this.noise(0.8, 300, 0.25); },
+  shoot()  { this.tone(700, 0.15, 'square', 0.10, 220); },
+  ui()     { this.tone(520, 0.08, 'sine', 0.15, 660); },
+  victory(){ [392, 494, 587, 784].forEach((f, i) => setTimeout(() => this.tone(f, 0.35, 'triangle', 0.22), i * 160)); },
+  defeat() { [330, 262, 196, 131].forEach((f, i) => setTimeout(() => this.tone(f, 0.4, 'triangle', 0.22), i * 200)); }
+};
+
+/* ---------------- 输入 ---------------- */
+const input = {
+  left: false, right: false,
+  jumpQ: 0, atkQ: 0, s1Q: 0, s2Q: 0,
+  queue(name) { this[name]++; },
+  take(name) { if (this[name] > 0) { this[name]--; return true; } return false; },
+  clearQ() { this.jumpQ = this.atkQ = this.s1Q = this.s2Q = 0; }
+};
+const GAME_KEYS = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','KeyA','KeyD','KeyW','KeyJ','KeyZ','KeyK','KeyX','KeyL','KeyC','KeyP','KeyM'];
+const keyDown = {};
+window.addEventListener('keydown', e => {
+  if (GAME_KEYS.includes(e.code)) e.preventDefault();
+  AudioSys.init();
+  if (e.repeat) return;
+  keyDown[e.code] = true;
+  switch (e.code) {
+    case 'KeyW': case 'ArrowUp': case 'Space': input.queue('jumpQ'); break;
+    case 'KeyJ': case 'KeyZ': input.queue('atkQ'); break;
+    case 'KeyK': case 'KeyX': input.queue('s1Q'); break;
+    case 'KeyL': case 'KeyC': input.queue('s2Q'); break;
+    case 'KeyP': togglePause(); break;
+    case 'KeyM': toggleMute(); break;
+  }
+});
+window.addEventListener('keyup', e => { keyDown[e.code] = false; });
+function pollMoveKeys() {
+  input.left = !!(keyDown['KeyA'] || keyDown['ArrowLeft'] || touch.left);
+  input.right = !!(keyDown['KeyD'] || keyDown['ArrowRight'] || touch.right);
+}
+/* 触屏 */
+const touch = { left: false, right: false };
+document.querySelectorAll('#touch-controls .tc-btn').forEach(btn => {
+  const act = btn.dataset.act;
+  const on = e => {
+    e.preventDefault(); AudioSys.init();
+    if (act === 'left') touch.left = true;
+    else if (act === 'right') touch.right = true;
+    else if (act === 'jump') input.queue('jumpQ');
+    else if (act === 'attack') input.queue('atkQ');
+    else if (act === 'skill1') input.queue('s1Q');
+    else if (act === 'skill2') input.queue('s2Q');
+  };
+  const off = e => {
+    e.preventDefault();
+    if (act === 'left') touch.left = false;
+    else if (act === 'right') touch.right = false;
+  };
+  btn.addEventListener('touchstart', on, { passive: false });
+  btn.addEventListener('touchend', off, { passive: false });
+  btn.addEventListener('touchcancel', off, { passive: false });
+  btn.addEventListener('mousedown', on);
+  btn.addEventListener('mouseup', off);
+  btn.addEventListener('mouseleave', off);
+});
+
+/* ---------------- 游戏状态 ---------------- */
+let state = 'title';           // title | play | pause | over | win
+let shake = 0, time = 0, slowmo = 0;
+let score = 0, combo = 0, comboT = 0, kills = 0;
+let waveIdx = 0, waveState = 'idle', waveTimer = 0, spawnQueue = [], spawnTimer = 0, addTimer = 0;
+let boss = null, victoryTimer = 0;
+
+const WAVES = [
+  { chibi: 3 },
+  { chibi: 4, swift: 1 },
+  { chibi: 2, swift: 3 },
+  { brute: 1, chibi: 3 },
+  { brute: 2, swift: 2 },
+  { boss: 1 }
+];
+const SCORE = { chibi: 100, swift: 150, brute: 300, boss: 2000 };
+
+/* ---------------- 粒子 ---------------- */
+let particles = [];
+function addP(p) { if (particles.length < 600) particles.push(Object.assign({ t: 0 }, p)); }
+function spawnSlash(x, y, dir, big, color) {
+  const n = big ? 26 : 14;
+  for (let i = 0; i < n; i++) {
+    addP({ type: 'spark', x: x + rand(-20, 20), y: y + rand(-30, 10),
+      vx: rand(40, 260) * dir * (big ? 1.4 : 1), vy: rand(-160, 60),
+      life: rand(0.25, 0.55), maxLife: 0.55, size: rand(2, big ? 6 : 4),
+      color: color || (Math.random() < 0.6 ? '#bfe6ff' : '#5fb8ff') });
+  }
+  addP({ type: 'arc', x, y: y - 12, dir, life: 0.22, maxLife: 0.22, big: !!big });
+}
+function spawnWater(x, y, dir) {
+  for (let i = 0; i < 30; i++) {
+    const a = rand(-Math.PI, 0);
+    addP({ type: 'drop', x: x + rand(-30, 30), y: y + rand(-40, 0),
+      vx: Math.cos(a) * rand(60, 320) + dir * 120, vy: Math.sin(a) * rand(60, 300),
+      life: rand(0.4, 0.8), maxLife: 0.8, size: rand(2, 5), color: '#7fd4ff' });
+  }
+}
+function spawnBlood(x, y, dir) {
+  for (let i = 0; i < 12; i++) {
+    addP({ type: 'drop', x, y: y + rand(-20, 0), vx: rand(-160, 160) + dir * 90, vy: rand(-220, -40),
+      life: rand(0.3, 0.6), maxLife: 0.6, size: rand(2, 4), color: '#a01828', grav: 900 });
+  }
+}
+function spawnSmoke(x, y, n, color) {
+  for (let i = 0; i < (n || 14); i++) {
+    addP({ type: 'smoke', x: x + rand(-16, 16), y: y + rand(-30, 0),
+      vx: rand(-40, 40), vy: rand(-90, -20),
+      life: rand(0.5, 1.1), maxLife: 1.1, size: rand(8, 20), color: color || '#5a3f6e' });
+  }
+}
+function spawnPetals(n) {
+  for (let i = 0; i < n; i++) {
+    addP({ type: 'petal', x: rand(0, W), y: rand(-20, H * 0.6),
+      vx: rand(-30, -5), vy: rand(25, 60), life: rand(6, 12), maxLife: 12,
+      size: rand(3, 6), rot: rand(0, 6.3), vr: rand(-3, 3),
+      color: Math.random() < 0.5 ? '#f7c9d9' : '#fbeef3' });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.t += dt;
+    if (p.t >= p.life) { particles.splice(i, 1); continue; }
+    if (p.grav) p.vy += p.grav * dt;
+    if (p.type === 'petal') {
+      p.x += (p.vx + Math.sin(time * 2 + p.rot) * 18) * dt;
+      p.y += p.vy * dt; p.rot += p.vr * dt;
+      if (p.y > H) { p.y = -10; p.x = rand(0, W); }
+    } else {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.type === 'drop' && p.y > GROUND) { p.y = GROUND; p.vy *= -0.3; p.vx *= 0.6; }
+    }
+  }
+}
+function drawParticles() {
+  for (const p of particles) {
+    const k = 1 - p.t / p.life;
+    if (p.type === 'spark') {
+      ctx.globalAlpha = k; ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    } else if (p.type === 'drop') {
+      ctx.globalAlpha = k; ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * k + 0.5, 0, 6.3); ctx.fill();
+    } else if (p.type === 'smoke') {
+      ctx.globalAlpha = k * 0.55; ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 + p.t * 1.4), 0, 6.3); ctx.fill();
+    } else if (p.type === 'petal') {
+      ctx.globalAlpha = 0.75; ctx.fillStyle = p.color;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.beginPath(); ctx.ellipse(0, 0, p.size, p.size * 0.55, 0, 0, 6.3); ctx.fill();
+      ctx.restore();
+    } else if (p.type === 'arc') {
+      // 水之呼吸斩击弧光
+      ctx.globalAlpha = k;
+      ctx.strokeStyle = '#dff2ff'; ctx.lineWidth = p.big ? 10 : 6;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.big ? 95 : 62, p.dir > 0 ? -1.2 : Math.PI - 1.2, p.dir > 0 ? 1.2 : Math.PI + 1.2);
+      ctx.stroke();
+      ctx.globalAlpha = k * 0.7;
+      ctx.strokeStyle = '#3fa8ff'; ctx.lineWidth = p.big ? 20 : 13;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.big ? 95 : 62, p.dir > 0 ? -1.0 : Math.PI - 1.0, p.dir > 0 ? 1.0 : Math.PI + 1.0);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---------------- 背景 ---------------- */
+const stars = [];
+for (let i = 0; i < 130; i++) stars.push({ x: rand(0, W), y: rand(0, 300), r: rand(0.5, 1.8), tw: rand(0, 6.3) });
+const ridge1 = [], ridge2 = [];
+for (let x = 0; x <= W; x += 32) {
+  ridge1.push(300 + Math.sin(x * 0.011) * 46 + Math.sin(x * 0.033 + 2) * 18);
+  ridge2.push(360 + Math.sin(x * 0.017 + 5) * 34 + Math.sin(x * 0.05 + 1) * 12);
+}
+const trees = [];
+for (let x = -40; x < W + 40; x += rand(90, 170)) trees.push({ x, h: rand(90, 170), w: rand(26, 44) });
+
+function drawBackground() {
+  // 夜空
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#050816'); g.addColorStop(0.55, '#0d1230'); g.addColorStop(0.85, '#231a3d');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // 星星
+  for (const s of stars) {
+    ctx.globalAlpha = 0.35 + 0.35 * Math.sin(time * 1.6 + s.tw);
+    ctx.fillStyle = '#cfe0ff'; ctx.fillRect(s.x, s.y, s.r, s.r);
+  }
+  ctx.globalAlpha = 1;
+  // 月亮
+  const mx = 770, my = 105;
+  const mg = ctx.createRadialGradient(mx, my, 10, mx, my, 120);
+  mg.addColorStop(0, 'rgba(255,244,200,0.55)'); mg.addColorStop(1, 'rgba(255,244,200,0)');
+  ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(mx, my, 120, 0, 6.3); ctx.fill();
+  ctx.fillStyle = '#f7ecc0'; ctx.beginPath(); ctx.arc(mx, my, 44, 0, 6.3); ctx.fill();
+  ctx.fillStyle = 'rgba(210,190,140,0.5)';
+  ctx.beginPath(); ctx.arc(mx - 14, my - 8, 9, 0, 6.3); ctx.fill();
+  ctx.beginPath(); ctx.arc(mx + 10, my + 14, 6, 0, 6.3); ctx.fill();
+  // 远山
+  ctx.fillStyle = '#141b3d';
+  ctx.beginPath(); ctx.moveTo(0, H);
+  ridge1.forEach((y, i) => ctx.lineTo(i * 32, y));
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#0c1128';
+  ctx.beginPath(); ctx.moveTo(0, H);
+  ridge2.forEach((y, i) => ctx.lineTo(i * 32, y));
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+  // 树木剪影
+  ctx.fillStyle = '#070b1c';
+  for (const t of trees) {
+    ctx.fillRect(t.x - t.w * 0.12, GROUND - t.h, t.w * 0.24, t.h);
+    for (let b = 0; b < 4; b++) {
+      const bw = t.w * (1 - b * 0.2), by = GROUND - t.h + b * t.h * 0.24;
+      ctx.beginPath();
+      ctx.moveTo(t.x - bw / 2, by); ctx.lineTo(t.x + bw / 2, by); ctx.lineTo(t.x, by - t.h * 0.34);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  // 地面
+  const gg = ctx.createLinearGradient(0, GROUND, 0, H);
+  gg.addColorStop(0, '#2a2138'); gg.addColorStop(1, '#141020');
+  ctx.fillStyle = gg; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#3d3050'; ctx.fillRect(0, GROUND, W, 5);
+  ctx.fillStyle = 'rgba(120,200,120,0.25)';
+  for (let x = 8; x < W; x += 46) {
+    ctx.fillRect(x, GROUND - 7, 3, 7); ctx.fillRect(x + 5, GROUND - 5, 3, 5);
+  }
+  // 石板路
+  ctx.fillStyle = 'rgba(90,95,130,0.35)';
+  for (let x = 20; x < W; x += 90) {
+    ctx.beginPath(); ctx.ellipse(x, GROUND + 34, 30, 9, 0, 0, 6.3); ctx.fill();
+  }
+}
+
+/* ---------------- 玩家 ---------------- */
+const player = {
+  x: 200, y: GROUND, vx: 0, vy: 0, w: 34, h: 66,
+  face: 1, hp: 100, maxHp: 100,
+  onGround: true, jumps: 0,
+  atkStage: 0, atkT: 0, atkCd: 0, atkDidHit: false,
+  s1cd: 0, s2cd: 0, skillT: 0, skillKind: 0,
+  invuln: 0, runT: 0, dead: false, dashX: 0
+};
+const ATK = [
+  { dur: 0.26, range: 78,  dmg: 12, kb: 160, lunge: 60 },
+  { dur: 0.26, range: 82,  dmg: 14, kb: 200, lunge: 70 },
+  { dur: 0.34, range: 95,  dmg: 22, kb: 380, lunge: 110 }
+];
+function playerRect() { return { x: player.x - player.w / 2, y: player.y - player.h, w: player.w, h: player.h }; }
+
+function tryAttack() {
+  if (player.atkT > 0 || player.skillT > 0 || player.dead) return;
+  // 0.55 秒内连按则进阶连段，否则从第一段重新开始
+  const st = (player.atkCd <= 0 || player.atkStage >= 2) ? 0 : player.atkStage + 1;
+  player.atkStage = st; player.atkT = ATK[st].dur; player.atkDidHit = false;
+  player.atkCd = 0.55;
+  player.vx = player.face * ATK[st].lunge * 2.2;
+  AudioSys.swing();
+  spawnSlash(player.x + player.face * 40, player.y - 34, player.face, st === 2);
+}
+function trySkill1() { // 贰之型·水车：旋转大范围斩
+  if (player.s1cd > 0 || player.skillT > 0 || player.atkT > 0 || player.dead) return;
+  player.skillKind = 1; player.skillT = 0.62; player.s1cd = 6; player.invuln = Math.max(player.invuln, 0.35);
+  AudioSys.skill();
+  spawnWater(player.x, player.y - 30, player.face);
+}
+function trySkill2() { // 壹之型·水面斩击：突进斩
+  if (player.s2cd > 0 || player.skillT > 0 || player.atkT > 0 || player.dead) return;
+  player.skillKind = 2; player.skillT = 0.38; player.s2cd = 8; player.invuln = Math.max(player.invuln, 0.42);
+  player.dashX = player.x + player.face * 250;
+  AudioSys.dash();
+  spawnWater(player.x, player.y - 30, player.face);
+}
+function hurtPlayer(dmg, fromX) {
+  if (player.invuln > 0 || player.dead || state !== 'play') return;
+  player.hp -= dmg;
+  player.invuln = 0.9;
+  player.vx = (player.x < fromX ? -1 : 1) * 260;
+  player.vy = -220; player.onGround = false;
+  shake = Math.max(shake, 7);
+  spawnBlood(player.x, player.y - 40, player.x < fromX ? -1 : 1);
+  AudioSys.hurt();
+  combo = 0;
+  if (player.hp <= 0) { player.hp = 0; player.dead = true; gameOver(false); }
+}
+function updatePlayer(dt) {
+  const p = player;
+  p.runT += dt;
+  if (p.invuln > 0) p.invuln -= dt;
+  if (p.atkCd > 0) p.atkCd -= dt;
+  if (p.s1cd > 0) p.s1cd -= dt;
+  if (p.s2cd > 0) p.s2cd -= dt;
+
+  // 输入
+  if (input.take('jumpQ') && !p.dead) {
+    if (p.onGround || p.jumps < 2) {
+      p.vy = -470; p.onGround = false; p.jumps++;
+      AudioSys.jump();
+      for (let i = 0; i < 6; i++) addP({ type: 'smoke', x: p.x + rand(-12, 12), y: p.y, vx: rand(-40, 40), vy: rand(-60, -10), life: 0.4, maxLife: 0.4, size: rand(5, 10), color: '#8a7fa8' });
+    }
+  }
+  if (input.take('atkQ')) tryAttack();
+  if (input.take('s1Q')) trySkill1();
+  if (input.take('s2Q')) trySkill2();
+
+  // 技能状态
+  if (p.skillT > 0) {
+    p.skillT -= dt;
+    if (p.skillKind === 1) {
+      // 水车：旋转，多段判定
+      p.skillHitT = (p.skillHitT || 0) - dt;
+      if (p.skillHitT <= 0) {
+        p.skillHitT = 0.12;
+        damageDemons(p.x, p.y - 34, 100, 12, p.face * 120, true);
+        spawnSlash(p.x, p.y - 34, p.face, true);
+      }
+      p.vx *= 0.9;
+    } else if (p.skillKind === 2) {
+      // 水面斩击：突进
+      const target = p.dashX;
+      p.x = lerp(p.x, target, 1 - Math.pow(0.001, dt));
+      damageDemons(p.x + p.face * 50, p.y - 34, 70, 45, p.face * 420, true);
+      if (Math.random() < 0.6) spawnWater(p.x, p.y - 30, p.face);
+      if (Math.abs(p.x - target) < 8 || p.skillT <= 0) p.skillT = Math.min(p.skillT, 0.01);
+    }
+  }
+
+  // 普通攻击判定
+  if (p.atkT > 0) {
+    p.atkT -= dt;
+    const st = ATK[p.atkStage];
+    if (!p.atkDidHit && p.atkT < st.dur * 0.72) {
+      p.atkDidHit = true;
+      const hx = p.x + p.face * (st.range * 0.55);
+      damageDemons(hx, p.y - 34, st.range, st.dmg, p.face * st.kb, false);
+    }
+  }
+
+  // 移动
+  const SPD = 250;
+  if (p.skillT <= 0 && p.atkT <= 0 && !p.dead) {
+    if (input.left && !input.right) { p.vx = -SPD; p.face = -1; }
+    else if (input.right && !input.left) { p.vx = SPD; p.face = 1; }
+    else p.vx *= 0.82;
+  }
+  p.vy += 1500 * dt;
+  p.x += p.vx * dt; p.y += p.vy * dt;
+  p.x = clamp(p.x, 40, W - 40);
+  if (p.y >= GROUND) { p.y = GROUND; p.vy = 0; p.onGround = true; p.jumps = 0; }
+
+  if (comboT > 0) { comboT -= dt; if (comboT <= 0) combo = 0; }
+}
+
+/* ---------------- 恶鬼 ---------------- */
+const demons = [];
+const projectiles = [];
+const DEMON_CFG = {
+  chibi: { w: 38, h: 60, maxHp: 30, speed: 100, dmg: 8,  range: 48, score: 100, skin: '#9d92b8', dark: '#6b5f86' },
+  swift: { w: 32, h: 62, maxHp: 22, speed: 185, dmg: 6,  range: 44, score: 150, skin: '#8fb8a8', dark: '#57776c' },
+  brute: { w: 58, h: 96, maxHp: 95, speed: 62,  dmg: 16, range: 66, score: 300, skin: '#a88a7a', dark: '#6e564a' },
+  boss:  { w: 72, h: 116, maxHp: 520, speed: 88, dmg: 18, range: 74, score: 2000, skin: '#c9c2d8', dark: '#7a7090' }
+};
+class Demon {
+  constructor(type, x) {
+    const c = DEMON_CFG[type];
+    this.type = type; this.w = c.w; this.h = c.h;
+    this.maxHp = c.maxHp; this.hp = c.maxHp;
+    this.speed = c.speed; this.dmg = c.dmg; this.range = c.range;
+    this.score = c.score; this.skin = c.skin; this.dark = c.dark;
+    this.x = clamp(x, 50, W - 50); this.y = GROUND; this.vx = 0; this.vy = 0;
+    this.face = this.x > W / 2 ? -1 : 1;
+    this.state = 'spawn'; this.t = 0; this.atkT = 0; this.hurtT = 0;
+    this.windup = 0; this.recover = 0; this.cool = rand(0.2, 0.9);
+    this.flash = 0; this.deathT = 0; this.onGround = true;
+    // Boss 专用
+    this.pattern = 0; this.patT = 0; this.dashing = false; this.shots = 0;
+    spawnSmoke(this.x, GROUND, 16);
+  }
+  rect() { return { x: this.x - this.w / 2, y: this.y - this.h, w: this.w, h: this.h }; }
+  update(dt) {
+    const p = player;
+    this.t += dt;
+    if (this.flash > 0) this.flash -= dt;
+    if (this.state === 'die') {
+      this.deathT += dt; this.y += 30 * dt;
+      if (Math.random() < 0.3) spawnSmoke(this.x + rand(-14, 14), this.y - rand(0, 40), 2);
+      return this.deathT > 0.7;
+    }
+    if (this.state === 'spawn') { if (this.t > 0.8) { this.state = 'chase'; this.t = 0; } return false; }
+    if (p.dead) { this.vx *= 0.9; this.x += this.vx * dt; return false; }
+    if (this.hurtT > 0) { this.hurtT -= dt; this.x += this.vx * dt; this.vx *= 0.86; return false; }
+
+    const dx = p.x - this.x, adx = Math.abs(dx);
+    this.face = dx >= 0 ? 1 : -1;
+
+    if (this.type === 'boss') return this.updateBoss(dt, dx, adx);
+
+    // 普通鬼 AI
+    if (this.recover > 0) { this.recover -= dt; this.vx *= 0.85; }
+    else if (this.windup > 0) {
+      this.windup -= dt; this.vx *= 0.8;
+      if (this.windup <= 0) {
+        // 出手判定
+        const nx = p.x - this.x;
+        if (Math.abs(nx) < this.range + 14 && Math.abs(p.y - this.y) < 70) hurtPlayer(this.dmg, this.x);
+        AudioSys.swing();
+        this.atkT = 0.25; this.recover = this.cool;
+      }
+    } else if (adx < this.range) {
+      this.windup = 0.42; this.vx = 0;
+    } else {
+      this.vx = Math.sign(dx) * this.speed;
+      if (this.type === 'swift' && this.onGround && adx < 260 && adx > 120 && Math.random() < 0.02) {
+        this.vy = -430; this.vx = Math.sign(dx) * 320; this.onGround = false;
+      }
+    }
+    if (this.atkT > 0) this.atkT -= dt;
+    // 物理
+    this.vy += 1500 * dt;
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    this.x = clamp(this.x, 30, W - 30);
+    if (this.y >= GROUND) { this.y = GROUND; this.vy = 0; this.onGround = true; }
+    return false;
+  }
+  updateBoss(dt, dx, adx) {
+    const p = player;
+    this.patT -= dt;
+    if (this.dashing) {
+      this.x += this.vx * dt;
+      spawnSmoke(this.x, this.y - 50, 1, '#8a5aa8');
+      if (Math.abs(p.x - this.x) < 60 && Math.abs(p.y - this.y) < 80) { hurtPlayer(22, this.x); this.dashing = false; this.recover = 1.0; }
+      if ((this.vx > 0 && this.x > W - 60) || (this.vx < 0 && this.x < 60) || this.patT <= 0) { this.dashing = false; this.recover = 1.0; }
+      return false;
+    }
+    if (this.recover > 0) { this.recover -= dt; this.vx *= 0.85; this.x += this.vx * dt; return false; }
+    if (this.windup > 0) {
+      this.windup -= dt; this.vx *= 0.8;
+      if (this.windup <= 0) {
+        if (this.pattern === 0) { // 爪击三连
+          if (Math.abs(p.x - this.x) < this.range + 20 && Math.abs(p.y - this.y) < 80) hurtPlayer(this.dmg, this.x);
+          AudioSys.swingBig(); this.atkT = 0.3; this.shots++;
+          if (this.shots < 3) this.windup = 0.28; else { this.shots = 0; this.recover = 0.9; }
+        }
+      }
+      this.x += this.vx * dt; return false;
+    }
+    // 选择招式
+    if (this.patT <= 0) {
+      const r = Math.random();
+      if (adx < this.range + 10 || r < 0.4) { this.pattern = 0; this.windup = 0.5; this.shots = 0; }        // 爪击
+      else if (r < 0.7) { // 突进
+        AudioSys.bossRoar();
+        this.dashing = true; this.vx = Math.sign(dx) * 520; this.patT = 0.9;
+        this.face = Math.sign(dx) || 1;
+      } else { // 血鬼术·丝牢：发射蛛丝弹
+        this.pattern = 2; this.shots = 5; this.patT = 1.6; this.recover = 0.4;
+        this.vy = -260; this.onGround = false;
+      }
+    } else if (this.pattern === 2 && this.shots > 0) {
+      this.shotT = (this.shotT || 0) - dt;
+      if (this.shotT <= 0) {
+        this.shotT = 0.28; this.shots--;
+        const ang = Math.atan2((p.y - 40) - (this.y - 70), p.x - this.x);
+        projectiles.push({ x: this.x, y: this.y - 70, vx: Math.cos(ang) * 300, vy: Math.sin(ang) * 300, r: 10, dmg: 12, life: 3 });
+        AudioSys.shoot();
+      }
+    } else {
+      this.vx = Math.sign(dx) * this.speed;
+    }
+    if (this.atkT > 0) this.atkT -= dt;
+    this.vy += 1500 * dt;
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    this.x = clamp(this.x, 40, W - 40);
+    if (this.y >= GROUND) { this.y = GROUND; this.vy = 0; this.onGround = true; }
+    return false;
+  }
+  hurt(dmg, kb, dir) {
+    if (this.state === 'die' || this.state === 'spawn') return;
+    this.hp -= dmg; this.flash = 0.12;
+    this.vx = dir * kb * (this.type === 'brute' || this.type === 'boss' ? 0.25 : 1);
+    if (this.type !== 'boss') this.hurtT = 0.22;
+    spawnBlood(this.x, this.y - this.h * 0.6, dir);
+    if (this.hp <= 0) this.die();
+    else AudioSys.hit();
+  }
+  die() {
+    this.state = 'die'; this.deathT = 0;
+    kills++;
+    const bonus = 1 + Math.min(combo, 30) * 0.05;
+    score += Math.round(this.score * bonus);
+    player.hp = Math.min(player.maxHp, player.hp + 2);
+    spawnSmoke(this.x, this.y - 30, 20);
+    AudioSys.demonDie();
+    if (this.type === 'boss') { AudioSys.bossRoar(); shake = 14; slowmo = 0.6; victoryTimer = 1.6; }
+  }
+}
+
+/* 玩家攻击命中恶鬼（圆形范围判定） */
+function damageDemons(x, y, range, dmg, kb, isSkill) {
+  let hitAny = false;
+  for (const d of demons) {
+    if (d.state === 'die' || d.state === 'spawn') continue;
+    const cx = clamp(x, d.x - d.w / 2, d.x + d.w / 2);
+    const cy = clamp(y, d.y - d.h, d.y);
+    const dx = x - cx, dy = y - cy;
+    if (dx * dx + dy * dy < range * range) {
+      const dir = d.x >= player.x ? 1 : -1;
+      d.hurt(dmg, kb, dir || player.face);
+      hitAny = true;
+      combo++; comboT = 2.5;
+      shake = Math.max(shake, isSkill ? 5 : 2.5);
+      if (isSkill) AudioSys.hitBig();
+    }
+  }
+  if (hitAny) slowmo = Math.max(slowmo, isSkill ? 0.10 : 0.045);
+}
+
+/* 弹幕更新 */
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const pr = projectiles[i];
+    pr.life -= dt;
+    pr.x += pr.vx * dt; pr.y += pr.vy * dt;
+    let dead = pr.life <= 0 || pr.x < -20 || pr.x > W + 20 || pr.y < -20 || pr.y > H + 20;
+    if (!dead && state === 'play' && !player.dead) {
+      const r = playerRect();
+      if (pr.x > r.x && pr.x < r.x + r.w && pr.y > r.y && pr.y < r.y + r.h) {
+        hurtPlayer(pr.dmg, pr.x); dead = true;
+        spawnSmoke(pr.x, pr.y, 6, '#8a5aa8');
+      }
+    }
+    if (dead) projectiles.splice(i, 1);
+  }
+}
+function drawProjectiles() {
+  for (const pr of projectiles) {
+    const g = ctx.createRadialGradient(pr.x, pr.y, 1, pr.x, pr.y, pr.r * 2.2);
+    g.addColorStop(0, 'rgba(230,180,255,0.95)'); g.addColorStop(0.5, 'rgba(160,80,220,0.7)'); g.addColorStop(1, 'rgba(120,40,180,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(pr.x, pr.y, pr.r * 2.2, 0, 6.3); ctx.fill();
+    // 丝线
+    ctx.strokeStyle = 'rgba(200,150,255,0.5)'; ctx.lineWidth = 1.5;
+    for (let k = 0; k < 3; k++) {
+      const a = time * 4 + k * 2.1;
+      ctx.beginPath(); ctx.moveTo(pr.x, pr.y);
+      ctx.lineTo(pr.x + Math.cos(a) * pr.r * 2.4, pr.y + Math.sin(a) * pr.r * 2.4); ctx.stroke();
+    }
+  }
+}
+
+/* ---------------- 绘制：通用 ---------------- */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function limb(x1, y1, x2, y2, w, color) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+}
+function drawSword(hx, hy, ang, glow) {
+  ctx.save();
+  ctx.translate(hx, hy); ctx.rotate(ang);
+  if (glow) { ctx.shadowColor = '#7fd4ff'; ctx.shadowBlur = 18; }
+  // 刀身
+  const g = ctx.createLinearGradient(0, 0, 52, 0);
+  g.addColorStop(0, '#e8f2ff'); g.addColorStop(1, '#9fd0ff');
+  ctx.fillStyle = g;
+  ctx.fillRect(8, -2.5, 44, 5);
+  ctx.beginPath(); ctx.moveTo(52, -2.5); ctx.lineTo(60, 0); ctx.lineTo(52, 2.5); ctx.closePath(); ctx.fill();
+  // 镡（刀镡）
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#c9a227';
+  ctx.fillRect(4, -7, 5, 14);
+  // 刀柄
+  ctx.fillStyle = '#20222e'; ctx.fillRect(-12, -3, 16, 6);
+  ctx.restore();
+}
+
+/* ---------------- 绘制：玩家（鬼杀队剑士） ---------------- */
+function drawPlayer() {
+  const p = player;
+  ctx.save();
+  ctx.translate(Math.round(p.x), Math.round(p.y));
+  ctx.scale(p.face, 1);
+  if (p.invuln > 0 && !p.dead && Math.floor(time * 18) % 2 === 0) ctx.globalAlpha = 0.35;
+  const running = p.onGround && Math.abs(p.vx) > 40 && p.skillT <= 0 && p.atkT <= 0;
+  const sw = running ? Math.sin(p.runT * 16) * 11 : 0;
+  const bob = running ? Math.abs(Math.sin(p.runT * 16)) * 2.5 : 0;
+  const deadK = p.dead ? 1 : 0;
+
+  if (p.dead) { ctx.rotate(0.5 * Math.min(1, (1 - p.hp))); ctx.translate(0, 6); }
+
+  // 腿
+  limb(-3, -28, -3 + sw, -1, 9, '#26263e');
+  limb(3, -28, 3 - sw, -1, 9, '#1e1e32');
+  // 草鞋
+  ctx.fillStyle = '#4a3b2a';
+  ctx.fillRect(-3 + sw - 6, -4, 13, 5); ctx.fillRect(3 - sw - 6, -4, 13, 5);
+  // 躯干（队服）
+  ctx.fillStyle = '#1d1d33';
+  ctx.fillRect(-10, -58 + bob, 20, 32);
+  // 腰带
+  ctx.fillStyle = '#cfd6ea'; ctx.fillRect(-11, -33 + bob, 22, 5);
+  // 羽织（市松纹）：背后 + 衣袖
+  const flap = running ? Math.sin(p.runT * 16) * 3 : Math.sin(time * 2) * 1.5;
+  ctx.fillStyle = '#173a28';
+  ctx.fillRect(-17, -62 + bob, 8, 44 + flap * 0.4);
+  // 格纹
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 1; c++) {
+    if ((r + c) % 2) { ctx.fillStyle = '#0e0e0e'; ctx.fillRect(-17, -62 + bob + r * 7.4, 8, 7.4); }
+  }
+  ctx.fillStyle = '#173a28'; ctx.fillRect(9, -62 + bob, 8, 44 - flap * 0.4);
+  for (let r = 0; r < 6; r++) {
+    if (r % 2 === 0) { ctx.fillStyle = '#0e0e0e'; ctx.fillRect(9, -62 + bob + r * 7.4, 8, 7.4); }
+  }
+  // 头
+  const hx = 2, hy = -70 + bob;
+  ctx.fillStyle = '#f2c9a0';
+  ctx.beginPath(); ctx.arc(hx, hy, 9.5, 0, 6.3); ctx.fill();
+  // 头发
+  ctx.fillStyle = '#20202a';
+  ctx.beginPath(); ctx.arc(hx - 1, hy - 2, 9.5, Math.PI * 0.95, Math.PI * 2.02); ctx.fill();
+  ctx.fillRect(hx - 10, hy - 6, 4, 8);
+  // 额头伤疤
+  ctx.fillStyle = '#c0392b';
+  ctx.beginPath(); ctx.moveTo(hx + 5, hy - 6); ctx.lineTo(hx + 8, hy - 3); ctx.lineTo(hx + 5, hy); ctx.lineTo(hx + 2, hy - 3); ctx.closePath(); ctx.fill();
+  // 眼睛
+  ctx.fillStyle = '#222'; ctx.fillRect(hx + 3, hy - 1, 3.5, 2.5);
+  // 花札耳饰
+  ctx.fillStyle = '#d23c3c'; ctx.fillRect(hx - 9, hy + 1, 5, 4);
+  ctx.fillStyle = '#2e8b57'; ctx.fillRect(hx - 9, hy + 5, 5, 4);
+
+  // 刀（根据状态摆姿势）
+  let swordAng, handX, handY, glow = false;
+  if (p.dead) { swordAng = 1.4; handX = 12; handY = -20; }
+  else if (p.skillT > 0 && p.skillKind === 1) {
+    const a = time * 26;
+    handX = Math.cos(a) * 24; handY = -38 + Math.sin(a) * 24;
+    swordAng = a + Math.PI / 2; glow = true;
+    // 水车残影
+    ctx.globalAlpha *= 1; ctx.strokeStyle = 'rgba(127,212,255,0.35)'; ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.arc(0, -38, 46, 0, 6.3); ctx.stroke();
+  } else if (p.atkT > 0) {
+    const st = ATK[p.atkStage], k = 1 - p.atkT / st.dur;
+    const e = 1 - Math.pow(1 - k, 3);
+    const sweeps = [[-2.0, 0.9], [-2.2, 1.0], [-1.8, 1.35]];
+    swordAng = lerp(sweeps[p.atkStage][0], sweeps[p.atkStage][1], e);
+    handX = 15; handY = -44 + bob; glow = true;
+  } else if (p.skillT > 0 && p.skillKind === 2) {
+    swordAng = 0.04; handX = 22; handY = -42 + bob; glow = true;
+  } else {
+    swordAng = 1.25; handX = 9; handY = -30 + bob; // 腰间收刀
+  }
+  // 持刀手臂
+  if (!(p.skillT > 0 && p.skillKind === 1)) limb(4, -50 + bob, handX, handY, 7, '#1d1d33');
+  else limb(0, -38, handX, handY, 7, '#1d1d33');
+  drawSword(handX, handY, swordAng, glow);
+  ctx.restore();
+}
+
+/* ---------------- 绘制：恶鬼 ---------------- */
+function drawDemon(d) {
+  ctx.save();
+  let alpha = 1, rise = 0;
+  if (d.state === 'spawn') { const k = clamp(d.t / 0.8, 0, 1); alpha = k; rise = (1 - k) * 70; }
+  if (d.state === 'die') alpha = clamp(1 - d.deathT / 0.7, 0, 1);
+  ctx.globalAlpha = alpha;
+  ctx.translate(Math.round(d.x), Math.round(d.y + rise));
+  ctx.scale(d.face, 1);
+  const s = d.type === 'brute' ? 1.45 : d.type === 'boss' ? 1.6 : d.type === 'swift' ? 0.95 : 1;
+  ctx.scale(s, s);
+  const wob = Math.sin(d.t * 7) * 2;
+  const atkPose = d.atkT > 0 ? 1 : 0;
+
+  // 腿
+  limb(-6, -22, -8, -1, 8, d.dark); limb(6, -22, 8, -1, 8, d.dark);
+  // 躯干（佝偻）
+  ctx.fillStyle = d.skin;
+  ctx.beginPath(); ctx.ellipse(0, -40 + wob * 0.4, 15, 21, 0.15, 0, 6.3); ctx.fill();
+  if (d.type === 'boss') { // 蛛网纹
+    ctx.strokeStyle = 'rgba(60,30,80,0.8)'; ctx.lineWidth = 1.6;
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath(); ctx.moveTo(i * 6, -58); ctx.lineTo(i * 9, -24); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(0, -58, 22, 0.4, Math.PI - 0.4); ctx.stroke();
+  }
+  if (d.type === 'brute') { // 背刺
+    ctx.fillStyle = d.dark;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath(); ctx.moveTo(-8 - i * 2, -56 + i * 12); ctx.lineTo(-20 - i * 2, -50 + i * 12); ctx.lineTo(-8 - i * 2, -44 + i * 12); ctx.closePath(); ctx.fill();
+    }
+  }
+  // 手臂 + 利爪
+  const reach = d.windup > 0 ? 14 : atkPose ? 20 : 6;
+  limb(6, -48, 20 + reach, -38 + wob, 7, d.skin);
+  ctx.strokeStyle = '#e8e2f2'; ctx.lineWidth = 2.5;
+  for (let c = 0; c < 3; c++) {
+    ctx.beginPath(); ctx.moveTo(20 + reach, -42 + c * 4 + wob);
+    ctx.lineTo(30 + reach, -40 + c * 4 + wob); ctx.stroke();
+  }
+  limb(-8, -48, -16, -36, 7, d.dark);
+  // 头
+  ctx.fillStyle = d.skin;
+  ctx.beginPath(); ctx.arc(6, -66 + wob * 0.5, 12, 0, 6.3); ctx.fill();
+  // 角
+  ctx.fillStyle = d.dark;
+  ctx.beginPath(); ctx.moveTo(-2, -74); ctx.lineTo(-6, -88); ctx.lineTo(2, -76); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(10, -76); ctx.lineTo(12, -90); ctx.lineTo(17, -75); ctx.closePath(); ctx.fill();
+  if (d.type === 'boss') { // 白发
+    ctx.fillStyle = '#e8e4f2';
+    for (let i = 0; i < 7; i++) {
+      const a = Math.PI * (0.9 + i * 0.2);
+      ctx.beginPath(); ctx.moveTo(6 + Math.cos(a) * 10, -66 + Math.sin(a) * 10);
+      ctx.lineTo(6 + Math.cos(a) * 22, -66 + Math.sin(a) * 22);
+      ctx.lineTo(6 + Math.cos(a + 0.15) * 10, -66 + Math.sin(a + 0.15) * 10);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  // 眼睛（红光 / Boss 紫光）
+  const eg = d.type === 'boss' ? '#c77dff' : '#ff3b30';
+  ctx.shadowColor = eg; ctx.shadowBlur = 8; ctx.fillStyle = eg;
+  const eyeY = -67 + wob * 0.5;
+  if (d.windup > 0) { ctx.fillRect(6, eyeY - 2, 9, 4); } // 蓄力时眼睛睁大
+  else { ctx.beginPath(); ctx.arc(9, eyeY, 2.6, 0, 6.3); ctx.fill(); }
+  ctx.shadowBlur = 0;
+  // 獠牙
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.moveTo(10, -59); ctx.lineTo(12, -54); ctx.lineTo(14, -59); ctx.closePath(); ctx.fill();
+  // 受击闪白
+  if (d.flash > 0) {
+    ctx.globalAlpha = alpha * 0.65; ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.ellipse(0, -44, 20, 34, 0, 0, 6.3); ctx.fill();
+    ctx.beginPath(); ctx.arc(6, -66, 13, 0, 6.3); ctx.fill();
+  }
+  // 血条（受伤后显示）
+  if (d.hp < d.maxHp && d.state !== 'die') {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(-22, -92, 44, 6);
+    ctx.fillStyle = d.type === 'boss' ? '#b45aff' : '#ff5b5b';
+    ctx.fillRect(-21, -91, 42 * clamp(d.hp / d.maxHp, 0, 1), 4);
+  }
+  ctx.restore();
+}
+
+/* ---------------- 波次 ---------------- */
+const WAVE_NAMES = ['一', '二', '三', '四', '五'];
+function updateWaves(dt) {
+  if (waveState === 'intro') {
+    waveTimer -= dt;
+    if (waveTimer <= 0) {
+      spawnQueue = [];
+      const w = WAVES[waveIdx];
+      for (const k in w) for (let i = 0; i < w[k]; i++) spawnQueue.push(k);
+      spawnQueue.sort(() => Math.random() - 0.5);
+      waveState = 'spawning'; spawnTimer = 0.6;
+      AudioSys.wave();
+      if (waveIdx === 5) { AudioSys.bossRoar(); }
+    }
+  } else if (waveState === 'spawning') {
+    spawnTimer -= dt;
+    if (spawnTimer <= 0 && spawnQueue.length) {
+      spawnTimer = 1.15;
+      const type = spawnQueue.shift();
+      const x = Math.random() < 0.5 ? rand(30, 130) : rand(W - 130, W - 30);
+      const d = new Demon(type, x);
+      demons.push(d);
+      if (type === 'boss') { boss = d; shake = 10; addTimer = 10; }
+    }
+    if (!spawnQueue.length) waveState = 'fight';
+  } else if (waveState === 'fight') {
+    if (waveIdx === 5 && boss && boss.state !== 'die') {
+      addTimer -= dt;
+      const adds = demons.filter(d => d.type !== 'boss' && d.state !== 'die').length;
+      if (addTimer <= 0 && adds < 2) { addTimer = 12; demons.push(new Demon('chibi', Math.random() < 0.5 ? 60 : W - 60)); }
+    }
+    const alive = demons.length;
+    if (alive === 0) {
+      if (waveIdx >= WAVES.length - 1) {
+        if (victoryTimer > 0) victoryTimer -= dt;
+        else { gameOver(true); return; }
+      } else {
+        waveState = 'clear'; waveTimer = 2.8;
+        player.hp = Math.min(player.maxHp, player.hp + 15);
+        AudioSys.ui();
+      }
+    }
+  } else if (waveState === 'clear') {
+    waveTimer -= dt;
+    if (waveTimer <= 0) { waveIdx++; waveState = 'intro'; waveTimer = 2.4; }
+  }
+}
+
+/* ---------------- HUD ---------------- */
+function drawHUD() {
+  ctx.textBaseline = 'middle';
+  // HP
+  ctx.fillStyle = 'rgba(6,10,24,0.62)'; rr(14, 12, 320, 52, 10); ctx.fill();
+  ctx.fillStyle = '#cfe2ff'; ctx.font = 'bold 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillText('❤', 26, 39);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(48, 24, 240, 22, 6); ctx.fill();
+  const hpk = clamp(player.hp / player.maxHp, 0, 1);
+  const hg = ctx.createLinearGradient(48, 0, 288, 0);
+  hg.addColorStop(0, '#ff5b5b'); hg.addColorStop(1, hpk > 0.3 ? '#ffb35b' : '#ff2222');
+  ctx.fillStyle = hg;
+  if (hpk > 0) { rr(48, 24, 240 * hpk, 22, 6); ctx.fill(); }
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif';
+  ctx.fillText(Math.ceil(player.hp) + ' / ' + player.maxHp, 140, 36);
+  // 波次 & 得分
+  ctx.fillStyle = 'rgba(6,10,24,0.62)'; rr(W - 214, 12, 200, 52, 10); ctx.fill();
+  ctx.fillStyle = '#cfe2ff'; ctx.font = 'bold 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  const wlabel = waveIdx >= 5 ? '最终决战' : '第 ' + WAVE_NAMES[waveIdx] + ' 波';
+  ctx.fillText(wlabel, W - 200, 30);
+  ctx.fillStyle = '#ffd76e'; ctx.fillText('得分 ' + score, W - 200, 50);
+  // Boss 血条
+  if (boss && boss.state !== 'die' && waveIdx === 5) {
+    ctx.fillStyle = 'rgba(6,10,24,0.62)'; rr(W / 2 - 230, 14, 460, 34, 8); ctx.fill();
+    ctx.fillStyle = '#d9b8ff'; ctx.font = 'bold 14px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center'; ctx.fillText('下弦之鬼 · 血鬼术「丝牢」', W / 2, 26); ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(W / 2 - 220, 34, 440, 8, 4); ctx.fill();
+    ctx.fillStyle = '#b45aff';
+    const bk = clamp(boss.hp / boss.maxHp, 0, 1);
+    if (bk > 0) { rr(W / 2 - 220, 34, 440 * bk, 8, 4); ctx.fill(); }
+  }
+  // 技能冷却
+  const skills = [
+    { name: '贰之型·水车', key: 'K', cd: player.s1cd, max: 6, x: 16 },
+    { name: '壹之型·水面斩击', key: 'L', cd: player.s2cd, max: 8, x: 106 }
+  ];
+  for (const s of skills) {
+    ctx.fillStyle = 'rgba(6,10,24,0.62)'; rr(s.x, H - 92, 84, 78, 10); ctx.fill();
+    ctx.strokeStyle = s.cd <= 0 ? 'rgba(127,212,255,0.9)' : 'rgba(120,140,180,0.4)';
+    ctx.lineWidth = 2; rr(s.x, H - 92, 84, 78, 10); ctx.stroke();
+    if (s.cd > 0) {
+      ctx.fillStyle = 'rgba(4,6,16,0.72)'; rr(s.x, H - 92, 84, 78, 10); ctx.fill();
+      ctx.fillStyle = '#9fb6e8'; ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText(s.cd.toFixed(1), s.x + 42, H - 53); ctx.textAlign = 'left';
+    } else {
+      ctx.fillStyle = '#7fd4ff'; ctx.font = 'bold 13px "PingFang SC","Microsoft YaHei",sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText(s.name, s.x + 42, H - 66); ctx.textAlign = 'left';
+    }
+    ctx.fillStyle = '#8fa8d8'; ctx.font = '11px sans-serif';
+    ctx.fillText('按 ' + s.key, s.x + 8, H - 24);
+  }
+  // 连斩
+  if (combo >= 3) {
+    const pulse = 1 + Math.sin(time * 10) * 0.06;
+    ctx.save(); ctx.translate(W - 120, 130); ctx.scale(pulse, pulse);
+    ctx.fillStyle = '#ffd76e'; ctx.font = 'bold 30px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#ff9d2e'; ctx.shadowBlur = 14;
+    ctx.fillText(combo + ' 连斩！', 0, 0);
+    ctx.restore(); ctx.textAlign = 'left'; ctx.shadowBlur = 0;
+  }
+  // 波次横幅
+  if (waveState === 'intro' && waveTimer > 0) {
+    const k = clamp(waveTimer / 2.4, 0, 1);
+    ctx.globalAlpha = clamp(1.6 - k * 1.6, 0, 1);
+    ctx.fillStyle = '#e8f0ff'; ctx.font = 'bold 54px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center'; ctx.shadowColor = '#5f9dff'; ctx.shadowBlur = 24;
+    const label = waveIdx >= 5 ? '最终决战 · 下弦之鬼' : '第 ' + WAVE_NAMES[waveIdx] + ' 波 · 恶鬼来袭';
+    ctx.fillText(label, W / 2, H / 2 - 40);
+    ctx.shadowBlur = 0; ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+  } else if (waveState === 'clear') {
+    ctx.globalAlpha = clamp(waveTimer / 2.8, 0, 1) * 0.9 + 0.1;
+    ctx.fillStyle = '#9fe8b8'; ctx.font = 'bold 44px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center'; ctx.fillText('肃清！体力小幅恢复', W / 2, H / 2 - 40);
+    ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+  }
+  // 低血量警告
+  if (player.hp < 30 && !player.dead && state === 'play') {
+    const a = 0.22 + 0.14 * Math.sin(time * 6);
+    const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.75);
+    vg.addColorStop(0, 'rgba(200,0,0,0)'); vg.addColorStop(1, 'rgba(200,0,0,' + a.toFixed(3) + ')');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  }
+}
+
+/* ---------------- 流程控制 ---------------- */
+const screenTitle = document.getElementById('screen-title');
+const screenOver = document.getElementById('screen-over');
+const overTitle = document.getElementById('over-title');
+const overStats = document.getElementById('over-stats');
+
+function resetGame() {
+  player.x = 200; player.y = GROUND; player.vx = 0; player.vy = 0;
+  player.face = 1; player.hp = player.maxHp; player.dead = false;
+  player.atkStage = 0; player.atkT = 0; player.atkCd = 0;
+  player.s1cd = 0; player.s2cd = 0; player.skillT = 0; player.invuln = 0;
+  demons.length = 0; projectiles.length = 0;
+  score = 0; combo = 0; comboT = 0; kills = 0;
+  waveIdx = 0; waveState = 'intro'; waveTimer = 2.4;
+  spawnQueue = []; boss = null; victoryTimer = 0; shake = 0; slowmo = 0;
+  input.clearQ();
+}
+function startGame() {
+  AudioSys.init(); AudioSys.ui();
+  resetGame();
+  screenTitle.classList.add('hidden');
+  screenOver.classList.add('hidden');
+  state = 'play';
+}
+function gameOver(win) {
+  if (state !== 'play') return;
+  state = win ? 'win' : 'over';
+  input.clearQ();
+  if (win) AudioSys.victory(); else AudioSys.defeat();
+  overTitle.textContent = win ? '下弦之鬼，已被斩杀！' : '你被恶鬼吞噬了…';
+  overTitle.style.color = win ? '#9fe8b8' : '#ff8b8b';
+  overStats.innerHTML = '最终得分：<b style="color:#ffd76e">' + score + '</b><br>斩杀恶鬼：' + kills + ' 只　到达：' +
+    (waveIdx >= 5 ? '最终决战' : '第 ' + WAVE_NAMES[waveIdx] + ' 波');
+  setTimeout(() => screenOver.classList.remove('hidden'), win ? 400 : 900);
+}
+function togglePause() {
+  if (state === 'play') { state = 'pause'; }
+  else if (state === 'pause') { state = 'play'; input.clearQ(); }
+}
+function toggleMute() {
+  AudioSys.muted = !AudioSys.muted;
+  document.getElementById('btn-mute').textContent = AudioSys.muted ? '🔇' : '🔊';
+}
+document.getElementById('btn-start').addEventListener('click', startGame);
+document.getElementById('btn-restart').addEventListener('click', startGame);
+document.getElementById('btn-pause').addEventListener('click', () => { AudioSys.init(); togglePause(); });
+document.getElementById('btn-mute').addEventListener('click', () => { AudioSys.init(); toggleMute(); });
+
+/* ---------------- 渲染 ---------------- */
+function render() {
+  ctx.save();
+  if (shake > 0) ctx.translate(rand(-shake, shake) * 0.5, rand(-shake, shake) * 0.5);
+  drawBackground();
+  drawProjectiles();
+  for (const d of demons) drawDemon(d);
+  if (state !== 'title') drawPlayer();
+  else {
+    // 标题界面背景里站一个持刀剪影
+    ctx.save(); ctx.globalAlpha = 0.9;
+    const px = player.x; player.x = W / 2 - 260;
+    drawPlayer(); player.x = px;
+    ctx.restore();
+  }
+  drawParticles();
+  ctx.restore();
+  if (state === 'play' || state === 'pause') drawHUD();
+  if (state === 'pause') {
+    ctx.fillStyle = 'rgba(4,6,16,0.6)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#e8f0ff'; ctx.font = 'bold 48px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center'; ctx.fillText('暂 停', W / 2, H / 2);
+    ctx.font = '18px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#9fb6e8'; ctx.fillText('按 P 或点击 ⏸ 继续', W / 2, H / 2 + 50);
+    ctx.textAlign = 'left';
+  }
+}
+
+/* ---------------- 主循环 ---------------- */
+let last = 0;
+function frame(ts) {
+  requestAnimationFrame(frame);
+  const rawDt = Math.min(0.033, ((ts - last) / 1000) || 0.016);
+  last = ts;
+  if (state === 'pause') { render(); return; }
+  let dt = rawDt;
+  if (slowmo > 0) { slowmo -= rawDt; dt *= 0.22; }
+  time += dt;
+  if (shake > 0) shake = Math.max(0, shake - 46 * rawDt);
+  if (state === 'play') {
+    pollMoveKeys();
+    updatePlayer(dt);
+    for (let i = demons.length - 1; i >= 0; i--) {
+      if (demons[i].update(dt)) demons.splice(i, 1);
+    }
+    updateProjectiles(dt);
+    updateWaves(dt);
+  }
+  updateParticles(state === 'play' ? dt : rawDt);
+  render();
+}
+
+/* ---------------- 启动 ---------------- */
+spawnPetals(45);
+requestAnimationFrame(frame);
