@@ -2,7 +2,7 @@
 
 一款在浏览器里就能玩的横版斩鬼动作游戏。扮演鬼杀队剑士，在月夜下用**水之呼吸**斩杀来袭的恶鬼，共 6 波，最终决战「下弦之鬼」。
 
-🎮 **在线游玩**：https://<你的GitHub用户名>.github.io/demon-slayer-night-hunt/
+🎮 **在线游玩**：https://chengeys.github.io/demon-slayer-night-hunt/
 
 ## 玩法
 
