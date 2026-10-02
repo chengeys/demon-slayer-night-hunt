@@ -332,7 +332,7 @@ function tryAttack() {
   const st = (player.atkCd <= 0 || player.atkStage >= 2) ? 0 : player.atkStage + 1;
   player.atkStage = st; player.atkT = ATK[st].dur; player.atkDidHit = false;
   player.atkCd = 0.55;
-  player.vx = player.face * ATK[st].lunge * 2.2;
+  player.vx = 0; // 挥刀时原地不动：取消攻击前冲位移
   AudioSys.swing();
   spawnSlash(player.x + player.face * 40, player.y - 34, player.face, st === 2);
 }
