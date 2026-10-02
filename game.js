@@ -451,9 +451,17 @@ function updatePlayer(dt) {
   // 移动
   const SPD = 250;
   if (p.skillT <= 0 && p.atkT <= 0 && p.dodgeT <= 0 && !p.dead) {
-    if (input.left && !input.right) { p.vx = -SPD; p.face = -1; }
-    else if (input.right && !input.left) { p.vx = SPD; p.face = 1; }
-    else p.vx *= 0.82;
+    if (p.onGround) {
+      if (input.left && !input.right) { p.vx = -SPD; p.face = -1; }
+      else if (input.right && !input.left) { p.vx = SPD; p.face = 1; }
+      else p.vx *= 0.82;
+    } else {
+      // 空中：保留惯性。助跑起跳后即使松开方向键也会向前滑行；
+      // 空中可微调方向，但转向比地面柔和
+      const AIR_ACC = 1500;
+      if (input.left && !input.right) { p.vx = Math.max(p.vx - AIR_ACC * dt, -SPD); p.face = -1; }
+      else if (input.right && !input.left) { p.vx = Math.min(p.vx + AIR_ACC * dt, SPD); p.face = 1; }
+    }
   }
   p.vy += 1500 * dt;
   p.x += p.vx * dt; p.y += p.vy * dt;
