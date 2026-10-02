@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>斩鬼夜行 · 鬼灭之刃同人小游戏</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -20,12 +20,14 @@
         <div><span class="key">A / D</span> 或 <span class="key">← / →</span> 移动</div>
         <div><span class="key">W</span> / <span class="key">↑</span> / <span class="key">空格</span> 跳跃（可二段跳）</div>
         <div><span class="key">J</span> / <span class="key">Z</span> 挥刀（连按打出三连斩）</div>
+        <div><span class="key">Shift</span> 闪避突进（短暂无敌）</div>
         <div><span class="key">K</span> / <span class="key">X</span> 水之呼吸 · 贰之型「水车」</div>
         <div><span class="key">L</span> / <span class="key">C</span> 水之呼吸 · 壹之型「水面斩击」</div>
-        <div><span class="key">P</span> 暂停　<span class="key">M</span> 静音</div>
+        <div><span class="key">U</span> / <span class="key">V</span> 水之呼吸 · 叁之型「流流舞·水刃」（远程）</div>
+        <div><span class="key">P</span> 暂停　<span class="key">M</span> 静音　<span class="key">F</span> 全屏</div>
       </div>
       <button id="btn-start" class="btn">拔 刀 出 战</button>
-      <p class="tip">共 6 波恶鬼，最终将面对「下弦之鬼」——祝武运昌隆！</p>
+      <p class="tip">共 8 关：从杂鱼鬼一路杀到「上弦之鬼」，难度递增——祝武运昌隆！</p>
     </div>
   </div>
 
@@ -40,9 +42,15 @@
 
   <!-- 右上小按钮 -->
   <div id="top-btns">
+    <button id="btn-full" class="icon-btn" title="全屏 (F)">⛶</button>
     <button id="btn-pause" class="icon-btn" title="暂停 (P)">⏸</button>
     <button id="btn-mute" class="icon-btn" title="静音 (M)">🔊</button>
   </div>
+
+  <!-- 竖屏提示 -->
+  <div id="portrait-hint">📱 横屏游玩体验更佳</div>
+  <!-- 轻提示 -->
+  <div id="toast"></div>
 
   <!-- 触屏按钮 -->
   <div id="touch-controls">
@@ -53,8 +61,10 @@
     <div class="tc-right">
       <button class="tc-btn" data-act="jump">跳</button>
       <button class="tc-btn atk" data-act="attack">斩</button>
+      <button class="tc-btn dodge" data-act="dodge">闪避</button>
       <button class="tc-btn skill" data-act="skill1">水车</button>
       <button class="tc-btn skill" data-act="skill2">水面</button>
+      <button class="tc-btn skill" data-act="skill3">水刃</button>
     </div>
   </div>
 </div>
