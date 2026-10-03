@@ -253,27 +253,56 @@ for (let x = 0; x <= W; x += 32) {
 const trees = [];
 for (let x = -40; x < W + 40; x += rand(90, 170)) trees.push({ x, h: rand(90, 170), w: rand(26, 44) });
 
-function drawBackground() {
-  // 夜空
+/* ============ 背景：8 关卡鬼灭主题场景 ============ */
+const SKY = [
+  { top: '#031018', mid: '#0b1e30', bot: '#16303a' }, // 0 狭雾山·雾林
+  { top: '#070a1c', mid: '#141a3a', bot: '#3a2440' }, // 1 浅草·夜街
+  { top: '#0a0a18', mid: '#1a1430', bot: '#2a2040' }, // 2 蜘蛛山·蛛丝
+  { top: '#050818', mid: '#101236', bot: '#2a1a3a' }, // 3 无限列车
+  { top: '#0c0716', mid: '#22102e', bot: '#4a1a34' }, // 4 吉原花街
+  { top: '#060a20', mid: '#12203c', bot: '#3a2a4a' }, // 5 刀匠之村
+  { top: '#050818', mid: '#101a3a', bot: '#2e2148' }, // 6 产屋敷邸
+  { top: '#0e0508', mid: '#220d12', bot: '#3d1420' }  // 7 无限城
+];
+const GROUND_C = [
+  ['#232a33', '#12161c'], ['#2a2030', '#141020'], ['#20242a', '#101216'], ['#2a2a35', '#14141c'],
+  ['#33202a', '#181018'], ['#2a2438', '#141020'], ['#262233', '#121020'], ['#2e1a1c', '#160d10']
+];
+/* 装饰物（载入时随机排布，固定不变） */
+const fogBands = []; for (let i = 0; i < 6; i++) fogBands.push({ x: rand(0, W), y: rand(300, 450), w: rand(220, 420), h: rand(28, 60), sp: rand(6, 18) });
+const wistA = []; for (let i = 0; i < 24; i++) wistA.push({ x: rand(20, W - 20), y: rand(50, 210), r: rand(6, 13), ph: rand(0, 6.3) });
+const wistB = []; for (let i = 0; i < 30; i++) wistB.push({ x: rand(20, W - 20), y: rand(40, 130), r: rand(5, 11), ph: rand(0, 6.3) });
+const townBldgs = []; { let bx = -20; while (bx < W) { const bw = rand(120, 200); townBldgs.push({ x: bx, w: bw, h: rand(150, 230) }); bx += bw + rand(8, 26); } }
+const webNets = []; for (let i = 0; i < 5; i++) webNets.push({ x: rand(60, W - 60), y: rand(120, 250), r: rand(50, 90) });
+const cocoons = []; for (let i = 0; i < 4; i++) cocoons.push({ x: rand(80, W - 80), y: rand(210, 320), len: rand(40, 80) });
+const lampPosts = []; for (let lx = 120; lx < W; lx += 240) lampPosts.push(lx);
+const redLanterns = []; for (let i = 0; i < 6; i++) redLanterns.push({ x: 60 + i * 165 + rand(-20, 20), y: rand(150, 220), n: 4 });
+const sakuraTrees = []; for (let sx = 60; sx < W; sx += rand(180, 280)) sakuraTrees.push({ x: sx, s: rand(0.8, 1.2) });
+const villageHouses = []; { let hx = 0; while (hx < W) { const hw = rand(130, 190); villageHouses.push({ x: hx, w: hw }); hx += hw + rand(20, 50); } }
+const stoneLanterns = []; for (let lx = 100; lx < W; lx += 220) stoneLanterns.push(lx);
+const floatLanterns = []; for (let i = 0; i < 10; i++) floatLanterns.push({ x: rand(0, W), y: rand(80, 380), r: rand(10, 22), ph: rand(0, 6.3), sp: rand(8, 20) });
+const infFrames = []; for (let i = 0; i < 7; i++) infFrames.push({ x: rand(0, W), y: rand(60, 400), w: rand(120, 260), h: rand(90, 200), rot: rand(-0.35, 0.35) });
+
+function drawSky(si) {
+  const s = SKY[si];
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#050816'); g.addColorStop(0.55, '#0d1230'); g.addColorStop(0.85, '#231a3d');
+  g.addColorStop(0, s.top); g.addColorStop(0.55, s.mid); g.addColorStop(0.85, s.bot);
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-  // 星星
-  for (const s of stars) {
-    ctx.globalAlpha = 0.35 + 0.35 * Math.sin(time * 1.6 + s.tw);
-    ctx.fillStyle = '#cfe0ff'; ctx.fillRect(s.x, s.y, s.r, s.r);
+  for (const st of stars) {
+    ctx.globalAlpha = 0.35 + 0.35 * Math.sin(time * 1.6 + st.tw);
+    ctx.fillStyle = '#cfe0ff'; ctx.fillRect(st.x, st.y, st.r, st.r);
   }
   ctx.globalAlpha = 1;
-  // 月亮
-  const mx = 770, my = 105;
-  const mg = ctx.createRadialGradient(mx, my, 10, mx, my, 120);
-  mg.addColorStop(0, 'rgba(255,244,200,0.55)'); mg.addColorStop(1, 'rgba(255,244,200,0)');
-  ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(mx, my, 120, 0, 6.3); ctx.fill();
-  ctx.fillStyle = '#f7ecc0'; ctx.beginPath(); ctx.arc(mx, my, 44, 0, 6.3); ctx.fill();
+}
+function drawMoonAt(mx, my, mr, color) {
+  const mg = ctx.createRadialGradient(mx, my, 6, mx, my, mr * 2.6);
+  mg.addColorStop(0, 'rgba(255,244,200,0.5)'); mg.addColorStop(1, 'rgba(255,244,200,0)');
+  ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(mx, my, mr * 2.6, 0, 6.3); ctx.fill();
+  ctx.fillStyle = color || '#f7ecc0'; ctx.beginPath(); ctx.arc(mx, my, mr, 0, 6.3); ctx.fill();
   ctx.fillStyle = 'rgba(210,190,140,0.5)';
-  ctx.beginPath(); ctx.arc(mx - 14, my - 8, 9, 0, 6.3); ctx.fill();
-  ctx.beginPath(); ctx.arc(mx + 10, my + 14, 6, 0, 6.3); ctx.fill();
-  // 远山
+  ctx.beginPath(); ctx.arc(mx - mr * 0.3, my - mr * 0.18, mr * 0.2, 0, 6.3); ctx.fill();
+}
+function drawRidge() {
   ctx.fillStyle = '#141b3d';
   ctx.beginPath(); ctx.moveTo(0, H);
   ridge1.forEach((y, i) => ctx.lineTo(i * 32, y));
@@ -282,7 +311,8 @@ function drawBackground() {
   ctx.beginPath(); ctx.moveTo(0, H);
   ridge2.forEach((y, i) => ctx.lineTo(i * 32, y));
   ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
-  // 树木剪影
+}
+function drawTrees() {
   ctx.fillStyle = '#070b1c';
   for (const t of trees) {
     ctx.fillRect(t.x - t.w * 0.12, GROUND - t.h, t.w * 0.24, t.h);
@@ -293,20 +323,276 @@ function drawBackground() {
       ctx.closePath(); ctx.fill();
     }
   }
-  // 地面
-  const gg = ctx.createLinearGradient(0, GROUND, 0, H);
-  gg.addColorStop(0, '#2a2138'); gg.addColorStop(1, '#141020');
-  ctx.fillStyle = gg; ctx.fillRect(0, GROUND, W, H - GROUND);
-  ctx.fillStyle = '#3d3050'; ctx.fillRect(0, GROUND, W, 5);
-  ctx.fillStyle = 'rgba(120,200,120,0.25)';
-  for (let x = 8; x < W; x += 46) {
-    ctx.fillRect(x, GROUND - 7, 3, 7); ctx.fillRect(x + 5, GROUND - 5, 3, 5);
+}
+function drawWisteria(list, topY) {
+  for (const wc of list) {
+    const sway = Math.sin(time * 0.8 + wc.ph) * 4;
+    ctx.strokeStyle = 'rgba(110,80,150,0.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(wc.x, topY); ctx.lineTo(wc.x + sway, wc.y); ctx.stroke();
+    ctx.fillStyle = 'rgba(150,110,200,0.9)';
+    ctx.beginPath(); ctx.arc(wc.x + sway, wc.y, wc.r, 0, 6.3); ctx.fill();
+    ctx.fillStyle = 'rgba(195,155,235,0.9)';
+    ctx.beginPath(); ctx.arc(wc.x + sway - wc.r * 0.4, wc.y + wc.r * 0.55, wc.r * 0.55, 0, 6.3); ctx.fill();
   }
-  // 石板路
-  ctx.fillStyle = 'rgba(90,95,130,0.35)';
+}
+/* 0 狭雾山：雾林 + 紫藤花 */
+function bgMistForest() {
+  drawRidge();
+  drawTrees();
+  for (const f of fogBands) {
+    const fx = ((f.x + time * f.sp) % (W + f.w * 2)) - f.w;
+    const fg = ctx.createRadialGradient(fx, f.y, 4, fx, f.y, f.w / 2);
+    fg.addColorStop(0, 'rgba(185,215,228,0.22)'); fg.addColorStop(1, 'rgba(185,215,228,0)');
+    ctx.fillStyle = fg;
+    ctx.beginPath(); ctx.ellipse(fx, f.y, f.w / 2, f.h, 0, 0, 6.3); ctx.fill();
+  }
+  drawWisteria(wistA, 0);
+}
+/* 1 浅草：大正夜街 + 灯笼 */
+function bgAsakusa() {
+  drawMoonAt(830, 90, 30);
+  for (const b of townBldgs) {
+    const top = GROUND - b.h;
+    ctx.fillStyle = '#0d0a18';
+    ctx.fillRect(b.x, top, b.w, b.h);
+    ctx.beginPath(); ctx.moveTo(b.x - 8, top); ctx.lineTo(b.x + b.w / 2, top - 26); ctx.lineTo(b.x + b.w + 8, top); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(255,190,110,0.85)';
+    for (let wy = top + 32; wy < GROUND - 24; wy += 44)
+      for (let wx = b.x + 16; wx < b.x + b.w - 22; wx += 40)
+        if ((Math.floor(wx) * 7 + Math.floor(wy) * 13) % 5 < 2) ctx.fillRect(wx, wy, 20, 26);
+  }
+  // 大灯笼（雷门風）
+  const lx = 90, ly = 300;
+  const lg = ctx.createRadialGradient(lx, ly, 6, lx, ly, 90);
+  lg.addColorStop(0, 'rgba(255,120,80,0.55)'); lg.addColorStop(1, 'rgba(255,120,80,0)');
+  ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(lx, ly, 90, 0, 6.3); ctx.fill();
+  ctx.fillStyle = '#a02318';
+  ctx.beginPath(); ctx.ellipse(lx, ly, 34, 44, 0, 0, 6.3); ctx.fill();
+  ctx.fillStyle = '#1a1a1a'; ctx.fillRect(lx - 20, ly - 52, 40, 10); ctx.fillRect(lx - 14, ly + 42, 28, 8);
+  // 灯笼串
+  for (const ls of [{ x0: 260, y: 200 }, { x0: 520, y: 180 }, { x0: 760, y: 210 }]) {
+    ctx.strokeStyle = 'rgba(60,50,70,0.9)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(ls.x0, ls.y); ctx.quadraticCurveTo(ls.x0 + 100, ls.y + 34, ls.x0 + 200, ls.y); ctx.stroke();
+    for (let k = 0; k < 5; k++) {
+      const px = ls.x0 + 20 + k * 40, py = ls.y + 16 + Math.sin(k / 4 * Math.PI) * 14;
+      ctx.fillStyle = 'rgba(255,170,90,0.9)';
+      ctx.beginPath(); ctx.arc(px, py, 9, 0, 6.3); ctx.fill();
+      ctx.fillStyle = 'rgba(255,220,160,0.9)';
+      ctx.beginPath(); ctx.arc(px, py, 4, 0, 6.3); ctx.fill();
+    }
+  }
+}
+/* 2 那田蜘蛛山：蛛网 + 茧 */
+function bgSpiderMt() {
+  drawRidge();
+  drawTrees();
+  ctx.lineWidth = 1.2;
+  for (const wn of webNets) {
+    ctx.strokeStyle = 'rgba(230,235,245,0.5)';
+    for (let k = 0; k < 8; k++) {
+      const a = k / 8 * Math.PI * 2;
+      ctx.beginPath(); ctx.moveTo(wn.x, wn.y);
+      ctx.lineTo(wn.x + Math.cos(a) * wn.r, wn.y + Math.sin(a) * wn.r); ctx.stroke();
+    }
+    for (let rr2 = wn.r * 0.3; rr2 < wn.r; rr2 += wn.r * 0.22) {
+      ctx.beginPath(); ctx.arc(wn.x, wn.y, rr2, 0, 6.3); ctx.stroke();
+    }
+  }
+  for (const cn of cocoons) {
+    const sway = Math.sin(time * 1.1 + cn.x) * 5;
+    ctx.strokeStyle = 'rgba(230,235,245,0.6)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cn.x, cn.y - cn.len); ctx.lineTo(cn.x + sway, cn.y); ctx.stroke();
+    ctx.fillStyle = 'rgba(215,220,230,0.92)';
+    ctx.beginPath(); ctx.ellipse(cn.x + sway, cn.y + 14, 13, 20, 0, 0, 6.3); ctx.fill();
+    ctx.fillStyle = 'rgba(160,165,180,0.9)';
+    ctx.beginPath(); ctx.ellipse(cn.x + sway - 4, cn.y + 8, 6, 12, 0.3, 0, 6.3); ctx.fill();
+  }
+  const gg = ctx.createLinearGradient(0, 300, 0, GROUND);
+  gg.addColorStop(0, 'rgba(120,180,140,0)'); gg.addColorStop(1, 'rgba(120,180,140,0.14)');
+  ctx.fillStyle = gg; ctx.fillRect(0, 300, W, GROUND - 300);
+}
+/* 3 无限列车：列车剪影 + 铁轨 + 路灯 */
+function bgTrain() {
+  drawMoonAt(150, 100, 36);
+  const ty = GROUND - 150;
+  ctx.fillStyle = '#0a0c1a';
+  ctx.fillRect(W - 420, ty, 440, 120);
+  ctx.beginPath(); ctx.moveTo(W - 420, ty); ctx.lineTo(W - 462, ty + 42); ctx.lineTo(W - 462, ty + 120); ctx.lineTo(W - 420, ty + 120); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#0a0c1a'; ctx.fillRect(W - 470, ty - 26, 60, 26); // 烟囱
+  ctx.fillStyle = 'rgba(255,200,120,0.92)';
+  for (let i = 0; i < 8; i++) ctx.fillRect(W - 400 + i * 48, ty + 32, 30, 34);
+  for (let i = 0; i < 3; i++) { // 蒸汽
+    const age = (time * 40 + i * 55) % 95;
+    const sy = ty - 26 - age;
+    ctx.fillStyle = 'rgba(200,205,220,' + Math.max(0, 0.28 - age / 95 * 0.28).toFixed(2) + ')';
+    ctx.beginPath(); ctx.arc(W - 440 + i * 26, sy, 9 + age * 0.16, 0, 6.3); ctx.fill();
+  }
+  for (const lx of lampPosts) {
+    ctx.fillStyle = '#0a0c1a'; ctx.fillRect(lx - 3, GROUND - 190, 6, 190);
+    const lg = ctx.createRadialGradient(lx, GROUND - 200, 2, lx, GROUND - 200, 60);
+    lg.addColorStop(0, 'rgba(255,210,140,0.8)'); lg.addColorStop(1, 'rgba(255,210,140,0)');
+    ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(lx, GROUND - 200, 60, 0, 6.3); ctx.fill();
+    ctx.fillStyle = '#ffe2b0'; ctx.beginPath(); ctx.arc(lx, GROUND - 200, 9, 0, 6.3); ctx.fill();
+  }
+}
+function drawRailsOnGround() {
+  ctx.strokeStyle = '#3d4258'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(W / 2 - 320, H); ctx.lineTo(W / 2 - 24, GROUND + 6); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W / 2 + 320, H); ctx.lineTo(W / 2 + 24, GROUND + 6); ctx.stroke();
+  ctx.strokeStyle = '#2c3045'; ctx.lineWidth = 5;
+  for (let i = 0; i < 7; i++) {
+    const k = i / 7, y = GROUND + 6 + k * (H - GROUND - 6), wdt = 24 + k * 300;
+    ctx.beginPath(); ctx.moveTo(W / 2 - wdt, y); ctx.lineTo(W / 2 + wdt, y); ctx.stroke();
+  }
+}
+/* 4 吉原花街：红灯笼 + 暖阁 */
+function bgYoshiwara() {
+  drawMoonAt(830, 80, 26);
+  for (const b of townBldgs) {
+    const top = GROUND - b.h;
+    ctx.fillStyle = '#120a16';
+    ctx.fillRect(b.x, top, b.w, b.h);
+    ctx.beginPath(); ctx.moveTo(b.x - 8, top); ctx.lineTo(b.x + b.w / 2, top - 30); ctx.lineTo(b.x + b.w + 8, top); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(255,150,120,0.9)';
+    for (let wy = top + 30; wy < GROUND - 24; wy += 40)
+      for (let wx = b.x + 14; wx < b.x + b.w - 18; wx += 34)
+        if ((Math.floor(wx) * 5 + Math.floor(wy) * 11) % 4 < 2) {
+          ctx.fillRect(wx, wy, 18, 24);
+          ctx.strokeStyle = 'rgba(40,20,20,0.8)'; ctx.lineWidth = 1.5;
+          ctx.strokeRect(wx, wy, 18, 24);
+        }
+  }
+  for (const rl of redLanterns) { // 红灯笼串
+    ctx.strokeStyle = 'rgba(50,30,30,0.9)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(rl.x, 0); ctx.lineTo(rl.x, rl.y + rl.n * 34); ctx.stroke();
+    for (let k = 0; k < rl.n; k++) {
+      const py = rl.y + k * 34;
+      const lg = ctx.createRadialGradient(rl.x, py, 2, rl.x, py, 34);
+      lg.addColorStop(0, 'rgba(255,90,70,0.7)'); lg.addColorStop(1, 'rgba(255,90,70,0)');
+      ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(rl.x, py, 34, 0, 6.3); ctx.fill();
+      ctx.fillStyle = '#c03028';
+      ctx.beginPath(); ctx.ellipse(rl.x, py, 13, 16, 0, 0, 6.3); ctx.fill();
+      ctx.fillStyle = '#1a1a1a'; ctx.fillRect(rl.x - 8, py - 20, 16, 5); ctx.fillRect(rl.x - 6, py + 15, 12, 4);
+    }
+  }
+  const wg = ctx.createLinearGradient(0, GROUND - 140, 0, GROUND);
+  wg.addColorStop(0, 'rgba(255,120,90,0)'); wg.addColorStop(1, 'rgba(255,120,90,0.16)');
+  ctx.fillStyle = wg; ctx.fillRect(0, GROUND - 140, W, 140);
+}
+/* 5 刀匠之村：茅草屋 + 樱花 */
+function bgSwordVillage() {
+  drawMoonAt(140, 110, 34);
+  drawRidge();
+  for (const h of villageHouses) {
+    const top = GROUND - 110;
+    ctx.fillStyle = '#141021'; ctx.fillRect(h.x, top, h.w, 110);
+    ctx.fillStyle = '#1f1832';
+    ctx.beginPath(); ctx.moveTo(h.x - 12, top); ctx.lineTo(h.x + h.w / 2, top - 55); ctx.lineTo(h.x + h.w + 12, top); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(90,80,110,0.5)'; ctx.lineWidth = 1.5;
+    for (let k = 1; k < 4; k++) {
+      ctx.beginPath(); ctx.moveTo(h.x - 12 + k * 6, top - k * 2); ctx.lineTo(h.x + h.w / 2, top - 55 + k * 10); ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,190,120,0.85)';
+    ctx.fillRect(h.x + h.w * 0.28, top + 42, 26, 32); ctx.fillRect(h.x + h.w * 0.58, top + 42, 26, 32);
+  }
+  for (const st of sakuraTrees) {
+    const tx = st.x, ty = GROUND - 165 * st.s;
+    ctx.fillStyle = '#0e0a1c'; ctx.fillRect(tx - 5 * st.s, ty, 10 * st.s, 165 * st.s);
+    const pg = ctx.createRadialGradient(tx, ty, 8, tx, ty, 95 * st.s);
+    pg.addColorStop(0, 'rgba(250,180,210,0.95)'); pg.addColorStop(1, 'rgba(250,180,210,0)');
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.arc(tx, ty, 95 * st.s, 0, 6.3); ctx.fill();
+    ctx.fillStyle = 'rgba(244,158,194,0.92)';
+    for (let k = 0; k < 9; k++) {
+      const a = k / 9 * 6.28 + st.x;
+      ctx.beginPath(); ctx.arc(tx + Math.cos(a) * 58 * st.s, ty + Math.sin(a) * 32 * st.s, 15 * st.s, 0, 6.3); ctx.fill();
+    }
+  }
+}
+/* 6 产屋敷宅邸：大宅 + 紫藤花架 + 石灯笼 */
+function bgMansion() {
+  drawMoonAt(820, 90, 28);
+  const mx = W / 2 - 260;
+  ctx.fillStyle = '#0c0a1c';
+  ctx.fillRect(mx, GROUND - 190, 520, 190);
+  ctx.beginPath(); ctx.moveTo(mx - 30, GROUND - 190); ctx.lineTo(mx + 260, GROUND - 262); ctx.lineTo(mx + 550, GROUND - 190); ctx.closePath(); ctx.fill();
+  for (let i = 0; i < 6; i++) {
+    const wx = mx + 40 + i * 78;
+    ctx.fillStyle = 'rgba(255,220,170,0.78)'; ctx.fillRect(wx, GROUND - 150, 52, 90);
+    ctx.strokeStyle = 'rgba(20,16,30,0.9)'; ctx.lineWidth = 3; ctx.strokeRect(wx, GROUND - 150, 52, 90);
+    ctx.beginPath(); ctx.moveTo(wx + 26, GROUND - 150); ctx.lineTo(wx + 26, GROUND - 60); ctx.stroke();
+  }
+  ctx.fillStyle = '#0e0a1c'; ctx.fillRect(0, 0, W, 24);
+  for (let x = 40; x < W; x += 120) ctx.fillRect(x, 0, 10, 24);
+  drawWisteria(wistB, 24);
+  for (const lx of stoneLanterns) {
+    ctx.fillStyle = '#1a1626';
+    ctx.fillRect(lx - 14, GROUND - 26, 28, 8);
+    ctx.fillRect(lx - 4, GROUND - 62, 8, 38);
+    ctx.fillRect(lx - 12, GROUND - 76, 24, 15);
+    ctx.beginPath(); ctx.moveTo(lx - 18, GROUND - 76); ctx.lineTo(lx, GROUND - 92); ctx.lineTo(lx + 18, GROUND - 76); ctx.closePath(); ctx.fill();
+    ctx.fillRect(lx - 3, GROUND - 96, 6, 6);
+    const lg = ctx.createRadialGradient(lx, GROUND - 68, 1, lx, GROUND - 68, 26);
+    lg.addColorStop(0, 'rgba(255,210,150,0.85)'); lg.addColorStop(1, 'rgba(255,210,150,0)');
+    ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(lx, GROUND - 68, 26, 0, 6.3); ctx.fill();
+  }
+}
+/* 7 无限城：错乱木格 + 浮空灯笼 */
+function bgInfinityCastle() {
+  for (const f of infFrames) {
+    ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(f.rot);
+    ctx.strokeStyle = 'rgba(130,64,52,0.55)'; ctx.lineWidth = 10;
+    ctx.strokeRect(-f.w / 2, -f.h / 2, f.w, f.h);
+    ctx.strokeStyle = 'rgba(95,42,38,0.5)'; ctx.lineWidth = 4;
+    for (let gx = -f.w / 2 + 30; gx < f.w / 2; gx += 30) {
+      ctx.beginPath(); ctx.moveTo(gx, -f.h / 2); ctx.lineTo(gx, f.h / 2); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.moveTo(-f.w / 2, 0); ctx.lineTo(f.w / 2, 0); ctx.stroke();
+    ctx.restore();
+  }
+  for (const fl of floatLanterns) {
+    const fy = fl.y + Math.sin(time * 0.7 + fl.ph) * 24;
+    const fx = fl.x + Math.cos(time * 0.4 + fl.ph) * 30;
+    const lg = ctx.createRadialGradient(fx, fy, 2, fx, fy, fl.r * 2.6);
+    lg.addColorStop(0, 'rgba(255,200,130,0.7)'); lg.addColorStop(1, 'rgba(255,200,130,0)');
+    ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(fx, fy, fl.r * 2.6, 0, 6.3); ctx.fill();
+    ctx.strokeStyle = 'rgba(60,40,30,0.8)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(fx, 0); ctx.lineTo(fx, fy - fl.r); ctx.stroke();
+    ctx.fillStyle = '#e8a05a';
+    ctx.beginPath(); ctx.ellipse(fx, fy, fl.r * 0.7, fl.r, 0, 0, 6.3); ctx.fill();
+    ctx.fillStyle = '#7a4a2a'; ctx.fillRect(fx - fl.r * 0.4, fy - fl.r - 4, fl.r * 0.8, 5);
+  }
+  const rg = ctx.createLinearGradient(0, GROUND - 120, 0, H);
+  rg.addColorStop(0, 'rgba(180,60,50,0)'); rg.addColorStop(1, 'rgba(180,60,50,0.28)');
+  ctx.fillStyle = rg; ctx.fillRect(0, GROUND - 120, W, H - GROUND + 120);
+}
+const BG_MID = [bgMistForest, bgAsakusa, bgSpiderMt, bgTrain, bgYoshiwara, bgSwordVillage, bgMansion, bgInfinityCastle];
+function drawGroundLayer(si) {
+  const gc = GROUND_C[si];
+  const g = ctx.createLinearGradient(0, GROUND, 0, H);
+  g.addColorStop(0, gc[0]); g.addColorStop(1, gc[1]);
+  ctx.fillStyle = g; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fillRect(0, GROUND, W, 4);
+  if (si === 3) { drawRailsOnGround(); return; }
+  if (si === 7) { // 无限城：榻榻米格
+    ctx.strokeStyle = 'rgba(150,90,70,0.25)'; ctx.lineWidth = 2;
+    for (let x = 0; x < W; x += 80) { ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x - 40, H); ctx.stroke(); }
+    return;
+  }
+  ctx.fillStyle = 'rgba(140,150,180,0.18)';
   for (let x = 20; x < W; x += 90) {
     ctx.beginPath(); ctx.ellipse(x, GROUND + 34, 30, 9, 0, 0, 6.3); ctx.fill();
   }
+  ctx.fillStyle = 'rgba(120,200,120,0.20)';
+  for (let x = 8; x < W; x += 46) {
+    ctx.fillRect(x, GROUND - 7, 3, 7); ctx.fillRect(x + 5, GROUND - 5, 3, 5);
+  }
+}
+function drawBackground() {
+  const si = Math.max(0, Math.min(stageIdx, STAGES.length - 1));
+  drawSky(si);
+  BG_MID[si]();
+  drawGroundLayer(si);
 }
 
 /* ---------------- 玩家 ---------------- */
